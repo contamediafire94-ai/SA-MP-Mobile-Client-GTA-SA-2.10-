@@ -1,6 +1,6 @@
 plugins {
     id 'com.android.application'
-    id 'com.google.gms.google-services'
+    // id 'com.google.gms.google-services'
     id 'com.google.firebase.crashlytics'
     id 'org.jetbrains.kotlin.android'
 }
@@ -72,12 +72,17 @@ android {
     }
 
     packagingOptions {
-        jniLibs {
-            excludes += ['META-INF/*']
-        }
-        resources {
-            excludes += ['META-INF/*']
-        }
+    jniLibs {
+        excludes += ['META-INF/*']
+        pickFirsts += [
+            'lib/arm64-v8a/libbass.so',
+            'lib/armeabi-v7a/libbass.so'
+        ]
+    }
+
+    resources {
+        excludes += ['META-INF/*']
+    }
     }
 
     ndkVersion '28.0.13004108'
@@ -141,5 +146,5 @@ dependencies {
     implementation 'androidx.viewpager2:viewpager2:1.1.0'
     implementation group: 'org.apache.commons', name: 'commons-lang3', version: '3.0'
     implementation "com.github.skydoves:colorpickerview:2.3.0"
-    apply plugin: 'com.google.gms.google-services'
+    // apply plugin: 'com.google.gms.google-services'
 }
