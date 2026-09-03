@@ -3,9 +3,7 @@ package com.russia.launcher.storage;
 import static com.russia.launcher.config.Config.NATIVE_SETTINGS_FILE_PATH;
 
 import android.content.Context;
-import android.widget.Toast;
 
-import org.ini4j.InvalidFileFormatException;
 import org.ini4j.Wini;
 
 import java.io.File;
@@ -15,50 +13,44 @@ public class NativeStorage {
 
     private static final String CLIENT_SECTION_NAME = "client";
 
-    private static File getSettingsFile(Context context) throws IOException {
+    private static File getSettingsFile(Context context) {
         File externalDir = context.getExternalFilesDir(null);
+
         if (externalDir == null) {
-            throw new IOException("External files directory is unavailable");
+            return null;
         }
 
-        File settingsFile = new File(externalDir.getAbsolutePath() + NATIVE_SETTINGS_FILE_PATH);
-        File parentDir = settingsFile.getParentFile();
-
-        if (parentDir != null && !parentDir.exists() && !parentDir.mkdirs()) {
-            throw new IOException("Failed to create settings directory: " + parentDir.getAbsolutePath());
-        }
-
-        if (!settingsFile.exists() && !settingsFile.createNewFile()) {
-            throw new IOException("Failed to create settings file: " + settingsFile.getAbsolutePath());
-        }
-
-        return settingsFile;
+        return new File(externalDir.getAbsolutePath() + NATIVE_SETTINGS_FILE_PATH);
     }
 
     public static void addClientProperty(String propertyName, String value, Context context) {
+        File settingsFile = getSettingsFile(context);
+
+        if (settingsFile == null || !settingsFile.exists()) {
+            return;
+        }
+
         try {
-            File settingsFile = getSettingsFile(context);
             Wini w = new Wini(settingsFile);
             w.put(CLIENT_SECTION_NAME, propertyName, value);
             w.store();
-        } catch (InvalidFileFormatException e) {
-            throw new RuntimeException(e);
-        } catch (IOException e) {
-            throw new RuntimeException(e);
+        } catch (IOException ignored) {
+            // Não derruba o launcher caso o Android bloqueie a escrita.
         }
     }
 
     public static String getClientProperty(String property, Context context) {
+        File settingsFile = getSettingsFile(context);
+
+        if (settingsFile == null || !settingsFile.exists()) {
+            return null;
+        }
+
         try {
-            File settingsFile = getSettingsFile(context);
             Wini w = new Wini(settingsFile);
             return w.get(CLIENT_SECTION_NAME, property);
         } catch (IOException ignored) {
             return null;
         }
-    }
-
-    private static void showMessage(String message, Context context) {
-        Toast.makeText(context, message, Toast.LENGTH_SHORT).show();
     }
 }
