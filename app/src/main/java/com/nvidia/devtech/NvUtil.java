@@ -94,6 +94,11 @@ public class NvUtil
      */
     public String getParameter(String paramName)
     {
+        if (activity == null || activity.getIntent() == null || paramName == null)
+        {
+            return null;
+        }
+
     	return activity.getIntent().getStringExtra(paramName);
     }
 }

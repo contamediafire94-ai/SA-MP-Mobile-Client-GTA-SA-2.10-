@@ -411,16 +411,20 @@ public abstract class NvEventQueueActivity extends AppCompatActivity implements 
         System.out.println("**** onCreate");
         super.onCreate(savedInstanceState);
 
+        // IMPORTANT:
+        // The native init can call NvUtil immediately. Set Java-side context first
+        // so NvUtil.getParameter() never runs with a null Activity.
+        NvUtil.getInstance().setActivity(this);
+        NvAPKFileHelper.getInstance().setContext(this);
+
         if (supportPauseResume) {
             System.out.println("Calling init(false)");
             init(false);
         }
+
         handler = new Handler();
 
         mClipboardManager = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-
-        NvUtil.getInstance().setActivity(this);
-        NvAPKFileHelper.getInstance().setContext(this);
 
         display = ((WindowManager) this.getSystemService(WINDOW_SERVICE)).getDefaultDisplay();
 
