@@ -253,13 +253,13 @@ void CStreaming::InitImageList() {
     }
 
 #if VER_SAMP
-    CStreaming::AddImageToList("TEXDB\\GTA3.IMG", true);
-    CStreaming::AddImageToList("TEXDB\\GTA_INT.IMG", true);
+    CStreaming::AddImageToList("texdb/gta3.img", true);
+    CStreaming::AddImageToList("texdb/gta_int.img", true);
 //    CStreaming::AddImageToList("TEXDB\\SAMP.IMG", true);
 //    CStreaming::AddImageToList("TEXDB\\SAMPCOL.IMG", true);
 #else
-    CStreaming::AddImageToList("TEXDB\\GTA3.IMG", true);
-    CStreaming::AddImageToList("TEXDB\\GTA_INT.IMG", true);
+    CStreaming::AddImageToList("texdb/gta3.img", true);
+    CStreaming::AddImageToList("texdb/gta_int.img", true);
     CStreaming::AddImageToList("TEXDB\\SKINS.IMG", true);
     CStreaming::AddImageToList("TEXDB\\CARS.IMG", true);
     CStreaming::AddImageToList("TEXDB\\SAMP.IMG", true);
