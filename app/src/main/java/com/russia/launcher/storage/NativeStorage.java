@@ -5,8 +5,6 @@ import static com.russia.launcher.config.Config.NATIVE_SETTINGS_FILE_PATH;
 import android.content.Context;
 import android.widget.Toast;
 
-import com.russia.launcher.domain.messages.ErrorMessage;
-
 import org.ini4j.InvalidFileFormatException;
 import org.ini4j.Wini;
 
@@ -17,17 +15,30 @@ public class NativeStorage {
 
     private static final String CLIENT_SECTION_NAME = "client";
 
+    private static File getSettingsFile(Context context) throws IOException {
+        File externalDir = context.getExternalFilesDir(null);
+        if (externalDir == null) {
+            throw new IOException("External files directory is unavailable");
+        }
 
+        File settingsFile = new File(externalDir.getAbsolutePath() + NATIVE_SETTINGS_FILE_PATH);
+        File parentDir = settingsFile.getParentFile();
+
+        if (parentDir != null && !parentDir.exists() && !parentDir.mkdirs()) {
+            throw new IOException("Failed to create settings directory: " + parentDir.getAbsolutePath());
+        }
+
+        if (!settingsFile.exists() && !settingsFile.createNewFile()) {
+            throw new IOException("Failed to create settings file: " + settingsFile.getAbsolutePath());
+        }
+
+        return settingsFile;
+    }
 
     public static void addClientProperty(String propertyName, String value, Context context) {
         try {
-            File f = new File(context.getExternalFilesDir(null) + NATIVE_SETTINGS_FILE_PATH);
-
-            if (!f.exists()) {
-                return;
-            }
-
-            Wini w = new Wini(new File(context.getExternalFilesDir(null) + NATIVE_SETTINGS_FILE_PATH));
+            File settingsFile = getSettingsFile(context);
+            Wini w = new Wini(settingsFile);
             w.put(CLIENT_SECTION_NAME, propertyName, value);
             w.store();
         } catch (InvalidFileFormatException e) {
@@ -38,22 +49,16 @@ public class NativeStorage {
     }
 
     public static String getClientProperty(String property, Context context) {
-
-        String value = null;
-
         try {
-            Wini w = new Wini(new File(context.getExternalFilesDir(null) + NATIVE_SETTINGS_FILE_PATH));
-            value = w.get(CLIENT_SECTION_NAME, property);
-            w.store();
+            File settingsFile = getSettingsFile(context);
+            Wini w = new Wini(settingsFile);
+            return w.get(CLIENT_SECTION_NAME, property);
         } catch (IOException ignored) {
-
+            return null;
         }
-
-        return value;
     }
 
     private static void showMessage(String message, Context context) {
-        Toast.makeText(context, message, Toast.LENGTH_SHORT)
-                .show();
+        Toast.makeText(context, message, Toast.LENGTH_SHORT).show();
     }
 }
