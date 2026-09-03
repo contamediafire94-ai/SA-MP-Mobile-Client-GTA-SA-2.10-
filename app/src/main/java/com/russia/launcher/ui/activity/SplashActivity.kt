@@ -80,8 +80,8 @@ class SplashActivity : AppCompatActivity() {
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        FirebaseCrashlytics.getInstance().deleteUnsentReports()
-        FirebaseCrashlytics.getInstance().setCrashlyticsCollectionEnabled(true)
+        // FirebaseCrashlytics.getInstance().deleteUnsentReports()
+        // FirebaseCrashlytics.getInstance().setCrashlyticsCollectionEnabled(true)
 
         super.onCreate(savedInstanceState)
         binding = ActivitySplashBinding.inflate(layoutInflater)
@@ -191,27 +191,26 @@ class SplashActivity : AppCompatActivity() {
 
     private fun checkVersion() {
         val latestVersionInfoCall = networkService?.latestVersionInfoDto
-        latestVersionInfoCall?.enqueue(object : Callback<LatestVersionInfoDto?> {
-            override fun onResponse(call: Call<LatestVersionInfoDto?>, response: Response<LatestVersionInfoDto?>) {
-                if (!response.isSuccessful) {
-                    finish()
-                    exitProcess(0)
-                }
-                val currentVersion = currentVersion
-                val latestVersion: Int = response.body()?.version?.toInt() ?: 0
-                MainUtils.LATEST_APK_INFO = response.body()
-                if (currentVersion >= latestVersion) {
-                    apkVersionChecked = true
-                    startIfReady()
-                    return
-                }
-                MainUtils.type = DownloadType.UPDATE_APK
-                startActivity(Intent(this@SplashActivity, LoaderActivity::class.java))
+
+        if (latestVersionInfoCall == null) {
+            apkVersionChecked = true
+            startIfReady()
+            return
+        }
+
+        latestVersionInfoCall.enqueue(object : Callback<LatestVersionInfoDto?> {
+            override fun onResponse(
+                call: Call<LatestVersionInfoDto?>,
+                response: Response<LatestVersionInfoDto?>
+            ) {
+                apkVersionChecked = true
+                startIfReady()
             }
 
             override fun onFailure(call: Call<LatestVersionInfoDto?>, t: Throwable) {
-                finish()
-                exitProcess(0)
+                Log.e("SplashActivity", "Version check failed", t)
+                apkVersionChecked = true
+                startIfReady()
             }
         })
     }
