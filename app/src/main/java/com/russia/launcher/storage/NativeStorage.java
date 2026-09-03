@@ -12,10 +12,15 @@ import java.io.IOException;
 public class NativeStorage {
 
     private static final String CLIENT_SECTION_NAME = "client";
+    private static final String GUI_SECTION_NAME = "gui";
+    private static final String DEFAULT_FONT = "visby-round-cf-extra-bold.ttf";
 
     private static File getSettingsFile(Context context) {
-        File externalDir = context.getExternalFilesDir(null);
+        if (context == null) {
+            return null;
+        }
 
+        File externalDir = context.getExternalFilesDir(null);
         if (externalDir == null) {
             return null;
         }
@@ -23,33 +28,84 @@ public class NativeStorage {
         return new File(externalDir.getAbsolutePath() + NATIVE_SETTINGS_FILE_PATH);
     }
 
-    public static void addClientProperty(String propertyName, String value, Context context) {
+    /**
+     * Garante que SAMP/settings.ini exista.
+     * Nunca lança RuntimeException: em caso de erro, retorna null.
+     */
+    private static File ensureSettingsFile(Context context) {
         File settingsFile = getSettingsFile(context);
 
-        if (settingsFile == null || !settingsFile.exists()) {
-            return;
-        }
-
-        try {
-            Wini w = new Wini(settingsFile);
-            w.put(CLIENT_SECTION_NAME, propertyName, value);
-            w.store();
-        } catch (IOException ignored) {
-            // Não derruba o launcher caso o Android bloqueie a escrita.
-        }
-    }
-
-    public static String getClientProperty(String property, Context context) {
-        File settingsFile = getSettingsFile(context);
-
-        if (settingsFile == null || !settingsFile.exists()) {
+        if (settingsFile == null) {
             return null;
         }
 
         try {
-            Wini w = new Wini(settingsFile);
-            return w.get(CLIENT_SECTION_NAME, property);
-        } catch (IOException ignored) {
+            File parent = settingsFile.getParentFile();
+
+            if (parent != null && !parent.exists() && !parent.mkdirs()) {
+                return null;
+            }
+
+            if (!settingsFile.exists() && !settingsFile.createNewFile()) {
+                return null;
+            }
+
+            /*
+             * A base nativa espera [gui] Font.
+             * Se isso não existir, CSettings pode receber nullptr e crashar.
+             */
+            Wini wini = new Wini(settingsFile);
+
+            String font = wini.get(GUI_SECTION_NAME, "Font");
+            if (font == null || font.trim().isEmpty()) {
+                wini.put(GUI_SECTION_NAME, "Font", DEFAULT_FONT);
+                wini.store();
+            }
+
+            return settingsFile;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    public static void addClientProperty(String propertyName, String value, Context context) {
+        File settingsFile = ensureSettingsFile(context);
+
+        if (settingsFile == null || propertyName == null) {
+            return;
+        }
+
+        try {
+            Wini wini = new Wini(settingsFile);
+            wini.put(
+                    CLIENT_SECTION_NAME,
+                    propertyName,
+                    value == null ? "" : value
+            );
+
+            // Mantém a fonte obrigatória mesmo após alterações no arquivo.
+            String font = wini.get(GUI_SECTION_NAME, "Font");
+            if (font == null || font.trim().isEmpty()) {
+                wini.put(GUI_SECTION_NAME, "Font", DEFAULT_FONT);
+            }
+
+            wini.store();
+        } catch (Exception ignored) {
+            // Falha de armazenamento não deve derrubar o launcher.
+        }
+    }
+
+    public static String getClientProperty(String property, Context context) {
+        File settingsFile = ensureSettingsFile(context);
+
+        if (settingsFile == null || property == null) {
+            return null;
+        }
+
+        try {
+            Wini wini = new Wini(settingsFile);
+            return wini.get(CLIENT_SECTION_NAME, property);
+        } catch (Exception ignored) {
             return null;
         }
     }
