@@ -2,6 +2,9 @@
 #include "RW/RenderWare.h"
 #include <sstream>
 #include <cerrno>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <strings.h>
 #include "game.h"
 
 #include "../net/netgame.h"
@@ -72,6 +75,92 @@ static void BuildStoragePath(char* out, size_t outSize, const char* root, const 
     }
 }
 
+
+static bool ResolveCaseInsensitivePath(
+        char* out,
+        size_t outSize,
+        const char* root,
+        const char* relative)
+{
+    if (!out || outSize == 0 || !root || !relative) {
+        return false;
+    }
+
+    out[0] = '\0';
+
+    char normalized[512]{};
+    snprintf(normalized, sizeof(normalized), "%s", relative);
+
+    for (char* p = normalized; *p; ++p) {
+        if (*p == '\\') {
+            *p = '/';
+        }
+    }
+
+    char current[512]{};
+    snprintf(current, sizeof(current), "%s", root);
+
+    size_t currentLen = strlen(current);
+    while (currentLen > 1 && current[currentLen - 1] == '/') {
+        current[--currentLen] = '\0';
+    }
+
+    char* savePtr = nullptr;
+    char* segment = strtok_r(normalized, "/", &savePtr);
+
+    while (segment) {
+        if (!strcmp(segment, ".") || segment[0] == '\0') {
+            segment = strtok_r(nullptr, "/", &savePtr);
+            continue;
+        }
+
+        if (!strcmp(segment, "..")) {
+            return false;
+        }
+
+        char exactPath[512]{};
+        snprintf(exactPath, sizeof(exactPath), "%s/%s", current, segment);
+
+        struct stat st{};
+        if (stat(exactPath, &st) == 0) {
+            snprintf(current, sizeof(current), "%s", exactPath);
+            segment = strtok_r(nullptr, "/", &savePtr);
+            continue;
+        }
+
+        DIR* dir = opendir(current);
+        if (!dir) {
+            return false;
+        }
+
+        bool found = false;
+        char matchedName[256]{};
+
+        while (dirent* entry = readdir(dir)) {
+            if (!strcasecmp(entry->d_name, segment)) {
+                snprintf(matchedName, sizeof(matchedName), "%s", entry->d_name);
+                found = true;
+                break;
+            }
+        }
+
+        closedir(dir);
+
+        if (!found) {
+            return false;
+        }
+
+        char matchedPath[512]{};
+        snprintf(matchedPath, sizeof(matchedPath), "%s/%s", current, matchedName);
+        snprintf(current, sizeof(current), "%s", matchedPath);
+
+        segment = strtok_r(nullptr, "/", &savePtr);
+    }
+
+    snprintf(out, outSize, "%s", current);
+    return true;
+}
+
 static void TraceNvFOpen(const char* requested, const char* resolved, bool ok, int err)
 {
     if (!g_pszStorage) return;
@@ -112,11 +201,10 @@ stFile* NvFOpen(const char* r0, const char* r1, int r2, int r3)
         }
     }
 
-    static char path[512]{};
-    memset(path, 0, sizeof(path));
+    // Caminho lógico que será procurado dentro da data privada.
+    char effectiveRelative[320]{};
+    snprintf(effectiveRelative, sizeof(effectiveRelative), "%s", relative);
 
-    // A data inteira agora é instalada em filesDir pelo próprio APK.
-    // initSAMP() salva filesDir em g_pszRootStorage.
     const char* primaryRoot =
         (g_pszRootStorage && g_pszRootStorage[0] != '\0')
             ? g_pszRootStorage
@@ -127,43 +215,37 @@ stFile* NvFOpen(const char* r0, const char* r1, int r2, int r3)
         return nullptr;
     }
 
-    BuildStoragePath(path, sizeof(path), primaryRoot, relative);
-
-    // Redirecionamentos originais do cliente, agora também usando a data privada.
+    // Redirecionamentos originais do cliente.
     if (strstr(relative, "mainV1.scm") != nullptr) {
-        BuildStoragePath(path, sizeof(path), primaryRoot, "SAMP/main.scm");
-        Log("Loading %s", path);
+        snprintf(effectiveRelative, sizeof(effectiveRelative), "%s", "SAMP/main.scm");
     }
 
     if (strstr(relative, "SCRIPTV1.IMG") != nullptr) {
-        BuildStoragePath(path, sizeof(path), primaryRoot, "SAMP/script.img");
-        Log("Loading script.img..");
+        snprintf(effectiveRelative, sizeof(effectiveRelative), "%s", "SAMP/script.img");
     }
 
-    if (!strncmp(relative, "DATA/PEDS.IDE", 13)) {
-        BuildStoragePath(path, sizeof(path), primaryRoot, "SAMP/peds.ide");
-        Log("Loading peds.ide..");
+    if (!strncasecmp(relative, "DATA/PEDS.IDE", 13)) {
+        snprintf(effectiveRelative, sizeof(effectiveRelative), "%s", "SAMP/peds.ide");
     }
 
-    if (!strncmp(relative, "DATA/VEHICLES.IDE", 17)) {
-        BuildStoragePath(path, sizeof(path), primaryRoot, "SAMP/vehicles.ide");
-        Log("Loading vehicles.ide..");
+    if (!strncasecmp(relative, "DATA/VEHICLES.IDE", 17)) {
+        snprintf(effectiveRelative, sizeof(effectiveRelative), "%s", "SAMP/vehicles.ide");
     }
 
-    if (!strncmp(relative, "DATA/GTA.DAT", 12)) {
-        BuildStoragePath(path, sizeof(path), primaryRoot, "SAMP/gta.dat");
-        Log("Loading gta.dat..");
+    if (!strncasecmp(relative, "DATA/GTA.DAT", 12)) {
+        snprintf(effectiveRelative, sizeof(effectiveRelative), "%s", "SAMP/gta.dat");
     }
 
-    if (!strncmp(relative, "DATA/HANDLING.CFG", 17)) {
-        BuildStoragePath(path, sizeof(path), primaryRoot, "SAMP/handling.cfg");
-        Log("Loading handling.cfg..");
+    if (!strncasecmp(relative, "DATA/HANDLING.CFG", 17)) {
+        snprintf(effectiveRelative, sizeof(effectiveRelative), "%s", "SAMP/handling.cfg");
     }
 
-    if (!strncmp(relative, "DATA/WEAPON.DAT", 15)) {
-        BuildStoragePath(path, sizeof(path), primaryRoot, "SAMP/weapon.dat");
-        Log("Loading weapon.dat..");
+    if (!strncasecmp(relative, "DATA/WEAPON.DAT", 15)) {
+        snprintf(effectiveRelative, sizeof(effectiveRelative), "%s", "SAMP/weapon.dat");
     }
+
+    char path[512]{};
+    BuildStoragePath(path, sizeof(path), primaryRoot, effectiveRelative);
 
 #if VER_x32
     auto *st = (stFile*)malloc(8);
@@ -179,8 +261,9 @@ stFile* NvFOpen(const char* r0, const char* r1, int r2, int r3)
     st->isFileExist = false;
     st->f = nullptr;
 
+    // 1) Tenta o caminho com a capitalização exata recebida do GTA.
     errno = 0;
-    FILE *f = fopen(path, "rb");
+    FILE* f = fopen(path, "rb");
     int openErr = errno;
 
     if (f) {
@@ -190,18 +273,43 @@ stFile* NvFOpen(const char* r0, const char* r1, int r2, int r3)
         return st;
     }
 
-    /*
-     * Fallback temporário:
-     * se algum arquivo ainda não existir na data privada, tenta o caminho antigo
-     * de Android/data. Isso mantém compatibilidade com arquivos que o próprio jogo
-     * possa ter criado ali durante os testes.
-     */
+    // 2) O armazenamento privado (/data/user/0/...) diferencia maiúsculas/minúsculas.
+    // A data original veio do armazenamento emulado, onde caminhos como
+    // DATA/FONTS.DAT e data/fonts.dat costumavam funcionar como equivalentes.
+    // Se falhar por arquivo inexistente, percorre cada pasta ignorando o case.
+    if (openErr == ENOENT) {
+        char casePath[512]{};
+
+        if (ResolveCaseInsensitivePath(
+                casePath,
+                sizeof(casePath),
+                primaryRoot,
+                effectiveRelative)) {
+
+            errno = 0;
+            FILE* caseFile = fopen(casePath, "rb");
+            const int caseErr = errno;
+
+            if (caseFile) {
+                st->isFileExist = true;
+                st->f = caseFile;
+                TraceNvFOpen(r1, casePath, true, 0);
+                Log("NVFOpen case-insensitive: %s -> %s", effectiveRelative, casePath);
+                return st;
+            }
+
+            openErr = caseErr;
+        }
+    }
+
+    // Fallback temporário para Android/data caso algum arquivo não esteja
+    // presente na instalação privada.
     if (g_pszStorage && strcmp(primaryRoot, g_pszStorage) != 0) {
         char fallbackPath[512]{};
         BuildStoragePath(fallbackPath, sizeof(fallbackPath), g_pszStorage, relative);
 
         errno = 0;
-        FILE *fallback = fopen(fallbackPath, "rb");
+        FILE* fallback = fopen(fallbackPath, "rb");
         const int fallbackErr = errno;
 
         if (fallback) {
