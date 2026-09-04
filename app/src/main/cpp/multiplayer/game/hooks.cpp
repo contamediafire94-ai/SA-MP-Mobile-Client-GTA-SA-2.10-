@@ -31,6 +31,7 @@ static uint32_t dwRLEDecompressSourceSize = 0;
 extern bool g_bIsTestMode;
 
 extern CGUI *pGUI;
+extern char* g_pszRootStorage;
 // Neiae/SAMP
 bool g_bPlaySAMP = false;
 
@@ -105,7 +106,6 @@ stFile* NvFOpen(const char* r0, const char* r1, int r2, int r3)
     char relative[256]{};
     snprintf(relative, sizeof(relative), "%s", r1);
 
-    // Normaliza separadores antes de montar o caminho.
     for (char* p = relative; *p; ++p) {
         if (*p == '\\') {
             *p = '/';
@@ -114,7 +114,24 @@ stFile* NvFOpen(const char* r0, const char* r1, int r2, int r3)
 
     static char path[512]{};
     memset(path, 0, sizeof(path));
-    BuildStoragePath(path, sizeof(path), g_pszStorage, relative);
+
+    const char* fileName = strrchr(relative, '/');
+    fileName = fileName ? fileName + 1 : relative;
+
+    const char* ext = strrchr(fileName, '.');
+    const bool isGxt = ext &&
+        (!strcasecmp(ext, ".gxt"));
+
+    // Os arquivos GXT são copiados pelo Samp.kt para filesDir/TEXT.
+    // g_pszRootStorage recebe exatamente filesDir no initSAMP().
+    if (isGxt && g_pszRootStorage && g_pszRootStorage[0] != '\0') {
+        char privateRelative[320]{};
+        snprintf(privateRelative, sizeof(privateRelative), "TEXT/%s", fileName);
+        BuildStoragePath(path, sizeof(path), g_pszRootStorage, privateRelative);
+        Log("GXT private path: %s", path);
+    } else {
+        BuildStoragePath(path, sizeof(path), g_pszStorage, relative);
+    }
 
     // Redirecionamentos originais do cliente.
     if (strstr(relative, "mainV1.scm") != nullptr) {
@@ -170,33 +187,7 @@ stFile* NvFOpen(const char* r0, const char* r1, int r2, int r3)
 
     errno = 0;
     FILE *f = fopen(path, "rb");
-    int openErr = errno;
-
-    // CText pode pedir apenas "AMERICAN.GXT".
-    // Se isso acontecer, tenta automaticamente dentro de TEXT/.
-    if (!f) {
-        const char* fileName = strrchr(relative, '/');
-        fileName = fileName ? fileName + 1 : relative;
-
-        const char* ext = strrchr(fileName, '.');
-        const bool isGxt = ext && (!strcmp(ext, ".GXT") || !strcmp(ext, ".gxt"));
-
-        if (isGxt && strstr(relative, "TEXT/") == nullptr && strstr(relative, "text/") == nullptr) {
-            char fallbackRelative[320]{};
-            snprintf(fallbackRelative, sizeof(fallbackRelative), "TEXT/%s", fileName);
-
-            char fallbackPath[512]{};
-            BuildStoragePath(fallbackPath, sizeof(fallbackPath), g_pszStorage, fallbackRelative);
-
-            errno = 0;
-            f = fopen(fallbackPath, "rb");
-            openErr = errno;
-
-            if (f) {
-                snprintf(path, sizeof(path), "%s", fallbackPath);
-            }
-        }
-    }
+    const int openErr = errno;
 
     if (f) {
         st->isFileExist = true;
