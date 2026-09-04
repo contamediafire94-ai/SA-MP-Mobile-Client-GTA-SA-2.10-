@@ -11,6 +11,7 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.fragment.app.Fragment
@@ -35,6 +36,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.apache.commons.lang3.StringUtils
 import java.io.File
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
+import java.util.zip.ZipInputStream
 
 class MainActivity : AppCompatActivity() {
     private var animation: Animation? = null
@@ -163,6 +167,249 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startGame() {
+        // Primeira execução: instala a data pelo próprio app no armazenamento privado.
+        // Isso evita EACCES/FUSE em Android/data.
+        if (!isPrivateGameDataReady()) {
+            selectGameDataZip()
+            return
+        }
+
+        launchGameAfterDataReady()
+    }
+
+    private fun isPrivateGameDataReady(): Boolean {
+        val marker = File(filesDir, PRIVATE_DATA_MARKER)
+
+        // Além do marcador, confirma dois arquivos que o GTA realmente usa.
+        val americanGxt = File(filesDir, "TEXT/AMERICAN.GXT")
+        val mobileTxt = File(filesDir, "texdb/mobile/mobile.txt")
+
+        return marker.exists() && americanGxt.isFile && mobileTxt.isFile
+    }
+
+    private fun selectGameDataZip() {
+        Toast.makeText(
+            this,
+            "Selecione o dataparateste.zip",
+            Toast.LENGTH_LONG
+        ).show()
+
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/zip"
+        }
+
+        try {
+            startActivityForResult(intent, REQUEST_GAME_DATA_ZIP)
+        } catch (e: Exception) {
+            // Alguns gerenciadores não anunciam application/zip corretamente.
+            val fallback = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "*/*"
+            }
+            startActivityForResult(fallback, REQUEST_GAME_DATA_ZIP)
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+
+        if (requestCode != REQUEST_GAME_DATA_ZIP || resultCode != RESULT_OK) {
+            return
+        }
+
+        val uri = data?.data ?: run {
+            ActivityServiceImpl.showErrorMessage("Arquivo ZIP inválido.", this)
+            return
+        }
+
+        try {
+            val takeFlags = data.flags and
+                (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            contentResolver.takePersistableUriPermission(uri, takeFlags)
+        } catch (_: Exception) {
+            // A permissão temporária desta Activity já é suficiente para a instalação.
+        }
+
+        installGameDataZip(uri)
+    }
+
+    private fun installGameDataZip(uri: Uri) {
+        val progressDialog = findViewById<ConstraintLayout>(R.id.progressDialog)
+        progressDialog?.visibility = View.VISIBLE
+        playButton?.isEnabled = false
+
+        Toast.makeText(
+            this,
+            "Instalando a data... não feche o aplicativo.",
+            Toast.LENGTH_LONG
+        ).show()
+
+        Thread {
+            val traceFile = File(getExternalFilesDir(null), "data_install_trace.txt")
+
+            fun trace(message: String) {
+                try {
+                    traceFile.appendText(message + "\n")
+                } catch (_: Exception) {
+                }
+            }
+
+            try {
+                File(filesDir, PRIVATE_DATA_MARKER).delete()
+
+                val destinationRoot = filesDir.canonicalFile
+                val destinationPrefix = destinationRoot.path + File.separator
+
+                var rootPrefix: String? = null
+                var filesInstalled = 0
+                var bytesInstalled = 0L
+
+                trace("BEGIN uri=$uri")
+                trace("DEST=${destinationRoot.absolutePath}")
+
+                val rawInput = contentResolver.openInputStream(uri)
+                    ?: throw IllegalStateException("Não foi possível abrir o ZIP selecionado.")
+
+                BufferedInputStream(rawInput, 1024 * 1024).use { bufferedInput ->
+                    ZipInputStream(bufferedInput).use { zip ->
+                        val buffer = ByteArray(1024 * 1024)
+
+                        while (true) {
+                            val entry = zip.nextEntry ?: break
+
+                            var entryName = entry.name.replace('\\', '/')
+                            while (entryName.startsWith("/")) {
+                                entryName = entryName.substring(1)
+                            }
+
+                            if (entryName.isBlank()) {
+                                zip.closeEntry()
+                                continue
+                            }
+
+                            // O ZIP atual possui uma pasta externa "dataparateste/".
+                            // Detectamos a primeira pasta automaticamente e removemos esse prefixo.
+                            if (rootPrefix == null) {
+                                val firstSlash = entryName.indexOf('/')
+                                rootPrefix = if (firstSlash >= 0) {
+                                    entryName.substring(0, firstSlash + 1)
+                                } else {
+                                    ""
+                                }
+                                trace("ROOT_PREFIX=$rootPrefix")
+                            }
+
+                            val prefix = rootPrefix ?: ""
+                            val relativeName =
+                                if (prefix.isNotEmpty() && entryName.startsWith(prefix)) {
+                                    entryName.substring(prefix.length)
+                                } else {
+                                    entryName
+                                }
+
+                            if (relativeName.isBlank()) {
+                                zip.closeEntry()
+                                continue
+                            }
+
+                            val output = File(destinationRoot, relativeName).canonicalFile
+
+                            // Proteção contra caminhos como ../../ fora de filesDir.
+                            if (!output.path.startsWith(destinationPrefix)) {
+                                throw SecurityException("Entrada ZIP insegura: $entryName")
+                            }
+
+                            if (entry.isDirectory) {
+                                if (!output.exists() && !output.mkdirs()) {
+                                    throw IllegalStateException(
+                                        "Não foi possível criar ${output.absolutePath}"
+                                    )
+                                }
+                            } else {
+                                output.parentFile?.let { parent ->
+                                    if (!parent.exists() && !parent.mkdirs()) {
+                                        throw IllegalStateException(
+                                            "Não foi possível criar ${parent.absolutePath}"
+                                        )
+                                    }
+                                }
+
+                                BufferedOutputStream(output.outputStream(), 1024 * 1024).use { out ->
+                                    while (true) {
+                                        val read = zip.read(buffer)
+                                        if (read <= 0) break
+                                        out.write(buffer, 0, read)
+                                        bytesInstalled += read
+                                    }
+                                    out.flush()
+                                }
+
+                                filesInstalled++
+
+                                if (filesInstalled % 50 == 0) {
+                                    trace(
+                                        "PROGRESS files=$filesInstalled bytes=$bytesInstalled last=$relativeName"
+                                    )
+                                }
+                            }
+
+                            zip.closeEntry()
+                        }
+                    }
+                }
+
+                val americanGxt = File(filesDir, "TEXT/AMERICAN.GXT")
+                val mobileTxt = File(filesDir, "texdb/mobile/mobile.txt")
+
+                if (!americanGxt.isFile) {
+                    throw IllegalStateException("TEXT/AMERICAN.GXT não foi instalado.")
+                }
+
+                if (!mobileTxt.isFile) {
+                    throw IllegalStateException("texdb/mobile/mobile.txt não foi instalado.")
+                }
+
+                File(filesDir, PRIVATE_DATA_MARKER).writeText(
+                    "ok\nfiles=$filesInstalled\nbytes=$bytesInstalled\n"
+                )
+
+                trace("OK files=$filesInstalled bytes=$bytesInstalled")
+                trace("AMERICAN=${americanGxt.length()}")
+                trace("MOBILE_TXT=${mobileTxt.length()}")
+                trace("END")
+
+                runOnUiThread {
+                    progressDialog?.visibility = View.GONE
+                    playButton?.isEnabled = true
+
+                    Toast.makeText(
+                        this,
+                        "Data instalada. Iniciando o jogo...",
+                        Toast.LENGTH_LONG
+                    ).show()
+
+                    launchGameAfterDataReady()
+                }
+            } catch (e: Exception) {
+                trace(
+                    "FAIL type=${e.javaClass.simpleName} message=${e.message}"
+                )
+
+                runOnUiThread {
+                    progressDialog?.visibility = View.GONE
+                    playButton?.isEnabled = true
+                    ActivityServiceImpl.showErrorMessage(
+                        "Falha ao instalar a data: ${e.message}",
+                        this
+                    )
+                }
+            }
+        }.start()
+    }
+
+    private fun launchGameAfterDataReady() {
         val log = File(getExternalFilesDir(null).toString() + "/log.txt")
         log.delete()
 
@@ -259,9 +506,11 @@ class MainActivity : AppCompatActivity() {
         private const val GAME_DIRECTORY_EMPTY_SIZE = 0
         private const val SERVER_LOCKED_VALUE = 1
         private const val TEST_MODE_ON_VALUE = "1"
+        private const val REQUEST_GAME_DATA_ZIP = 5206
+        private const val PRIVATE_DATA_MARKER = ".betatester_data_ready"
 
         // Servidor SA-MP direto do Beta Tester
-        private const val SERVER_IP = "179.198.105.167"
-        private const val SERVER_PORT = "7125"
+        private const val SERVER_IP = "149.56.41.51"
+        private const val SERVER_PORT = "7774"
     }
 }
