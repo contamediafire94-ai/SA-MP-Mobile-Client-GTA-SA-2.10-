@@ -89,25 +89,24 @@ class Samp : GTASA() {
     }
 
     private fun prepareTextAssets() {
-        val externalRoot = getExternalFilesDir(null)
+        val traceRoot = getExternalFilesDir(null)
+        val traceFile = if (traceRoot != null) File(traceRoot, "text_copy_trace.txt") else null
 
-        if (externalRoot == null) {
-            Log.e("BetaTester", "TEXT: getExternalFilesDir retornou null")
-            return
-        }
-
-        val traceFile = File(externalRoot, "text_copy_trace.txt")
-        val targetDir = File(externalRoot, "TEXT")
+        // IMPORTANTE:
+        // Os .GXT ficam no armazenamento PRIVADO do app (/data/user/0/.../files/TEXT),
+        // evitando as restrições FUSE/EACCES de Android/data.
+        val privateRoot = filesDir
+        val targetDir = File(privateRoot, "TEXT")
 
         fun trace(message: String) {
             Log.i("BetaTester", "TEXT: $message")
             try {
-                traceFile.appendText(message + "\n")
+                traceFile?.appendText(message + "\n")
             } catch (_: Exception) {
             }
         }
 
-        trace("BEGIN root=${externalRoot.absolutePath}")
+        trace("BEGIN privateRoot=${privateRoot.absolutePath}")
 
         try {
             if (!targetDir.exists()) {
@@ -134,14 +133,6 @@ class Samp : GTASA() {
                 val targetFile = File(targetDir, filename)
 
                 try {
-                    // Forca recriacao pelo UID do proprio aplicativo.
-                    if (targetFile.exists()) {
-                        if (!targetFile.delete()) {
-                            trace("FAIL delete=${targetFile.absolutePath}")
-                            return@forEach
-                        }
-                    }
-
                     assets.open(assetPath).use { inputStream ->
                         targetFile.outputStream().use { outputStream ->
                             inputStream.copyTo(outputStream)
@@ -149,20 +140,19 @@ class Samp : GTASA() {
                         }
                     }
 
-                    // Confirma que o proprio APK consegue reabrir o arquivo.
                     var firstByte = -1
                     targetFile.inputStream().use { inputStream ->
                         firstByte = inputStream.read()
                     }
 
                     trace(
-                        "OK file=$filename size=${targetFile.length()} " +
-                            "canRead=${targetFile.canRead()} firstByte=$firstByte"
+                        "OK file=$filename path=${targetFile.absolutePath} " +
+                            "size=${targetFile.length()} canRead=${targetFile.canRead()} firstByte=$firstByte"
                     )
                 } catch (e: Exception) {
                     trace(
-                        "FAIL file=$filename type=${e.javaClass.simpleName} " +
-                            "message=${e.message}"
+                        "FAIL file=$filename path=${targetFile.absolutePath} " +
+                            "type=${e.javaClass.simpleName} message=${e.message}"
                     )
                 }
             }
