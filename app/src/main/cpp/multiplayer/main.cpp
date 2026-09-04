@@ -3,6 +3,10 @@
 #include <android/log.h>
 #include <ucontext.h>
 #include <pthread.h>
+#include <signal.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <stdint.h>
 
 #include "main.h"
 #include "game/game.h"
@@ -165,100 +169,145 @@ void MainLoop()
 	if(pNetGame) pNetGame->Process();
 }
 
-struct sigaction act_old;
-struct sigaction act1_old;
-struct sigaction act2_old;
-struct sigaction act3_old;
+static int g_nativeCrashFd = -1;
 
-
-void handler3(int signum, siginfo_t* info, void* contextPtr)
+static size_t SafeLen(const char* s, size_t maxLen)
 {
-	ucontext* context = (ucontext_t*)contextPtr;
-
-	if (act3_old.sa_sigaction)
-	{
-		act3_old.sa_sigaction(signum, info, contextPtr);
-	}
-
-	if (info->si_signo == SIGBUS)
-	{
-		PrintBuildCrashInfo();
-
-		CrashLog("SIGBUS | Fault address: 0x%X", info->si_addr);
-
-		PRINT_CRASH_STATES(context);
-
-		CStackTrace::printBacktrace();
-	}
-
+    if (!s) return 0;
+    size_t n = 0;
+    while (n < maxLen && s[n] != '\0') ++n;
+    return n;
 }
 
-void handler(int signum, siginfo_t *info, void* contextPtr)
+static void CrashWrite(const char* s)
 {
-	ucontext* context = (ucontext_t*)contextPtr;
-
-	if (act_old.sa_sigaction)
-	{
-		act_old.sa_sigaction(signum, info, contextPtr);
-	}
-
-	if(info->si_signo == SIGSEGV)
-	{
-		CrashLog(" ");
-		PrintBuildCrashInfo();
-
-		CrashLog("SIGSEGV | Fault address: 0x%X", info->si_addr);
-
-		PRINT_CRASH_STATES(context);
-
-		CStackTrace::printBacktrace();
-	}
+    if (g_nativeCrashFd < 0 || !s) return;
+    const size_t len = SafeLen(s, 1024);
+    if (len > 0) {
+        (void)write(g_nativeCrashFd, s, len);
+    }
 }
 
-void handler2(int signum, siginfo_t* info, void* contextPtr)
+static void CrashWriteHex(uintptr_t value)
 {
-	ucontext* context = (ucontext_t*)contextPtr;
+    if (g_nativeCrashFd < 0) return;
 
-	if (act2_old.sa_sigaction)
-	{
-		act2_old.sa_sigaction(signum, info, contextPtr);
-	}
+    char buf[2 + sizeof(uintptr_t) * 2 + 2]{};
+    static const char hex[] = "0123456789ABCDEF";
 
-	if (info->si_signo == SIGFPE)
-	{
-		PrintBuildCrashInfo();
+    buf[0] = '0';
+    buf[1] = 'x';
 
-		CrashLog("SIGFPE | Fault address: 0x%X", info->si_addr);
+    const int digits = static_cast<int>(sizeof(uintptr_t) * 2);
+    for (int i = 0; i < digits; ++i) {
+        const int shift = (digits - 1 - i) * 4;
+        buf[2 + i] = hex[(value >> shift) & 0xF];
+    }
 
-		PRINT_CRASH_STATES(context);
-
-		CStackTrace::printBacktrace();
-
-	}
-
+    buf[2 + digits] = '\n';
+    (void)write(g_nativeCrashFd, buf, static_cast<size_t>(3 + digits));
 }
 
-void handler1(int signum, siginfo_t* info, void* contextPtr)
+static void CrashWriteFieldHex(const char* name, uintptr_t value)
 {
-	auto context = (ucontext_t*)contextPtr;
+    CrashWrite(name);
+    CrashWriteHex(value);
+}
 
-	if (act1_old.sa_sigaction)
-	{
-		act1_old.sa_sigaction(signum, info, contextPtr);
-	}
+static const char* CrashSignalName(int signum)
+{
+    switch (signum) {
+        case SIGSEGV: return "SIGSEGV";
+        case SIGABRT: return "SIGABRT";
+        case SIGBUS:  return "SIGBUS";
+        case SIGFPE:  return "SIGFPE";
+        case SIGILL:  return "SIGILL";
+        default:      return "UNKNOWN";
+    }
+}
 
-	if (info->si_signo == SIGABRT)
-	{
-		CrashLog(" ");
-		PrintBuildCrashInfo();
+static void NativeCrashSignalHandler(int signum, siginfo_t* info, void* contextPtr)
+{
+    ucontext_t* context = reinterpret_cast<ucontext_t*>(contextPtr);
 
-		CrashLog("SIGABRT | Fault address: 0x%X", info->si_addr);
+    uintptr_t pc = 0;
+    uintptr_t lr = 0;
 
-		PRINT_CRASH_STATES(context);
+#if defined(__aarch64__)
+    if (context) {
+        pc = static_cast<uintptr_t>(context->uc_mcontext.pc);
+        lr = static_cast<uintptr_t>(context->uc_mcontext.regs[30]);
+    }
+#elif defined(__arm__)
+    if (context) {
+        pc = static_cast<uintptr_t>(context->uc_mcontext.arm_pc);
+        lr = static_cast<uintptr_t>(context->uc_mcontext.arm_lr);
+    }
+#endif
 
-		CStackTrace::printBacktrace();
-	}
+    CrashWrite("\n=== NATIVE CRASH ===\nsignal=");
+    CrashWrite(CrashSignalName(signum));
+    CrashWrite("\n");
 
+    CrashWriteFieldHex("fault=", info ? reinterpret_cast<uintptr_t>(info->si_addr) : 0);
+    CrashWriteFieldHex("pc=", pc);
+    CrashWriteFieldHex("lr=", lr);
+    CrashWriteFieldHex("libGTASA=", g_libGTASA);
+    CrashWriteFieldHex("libmultiplayer=", g_libSAMP);
+
+    if (pc >= g_libGTASA && g_libGTASA != 0) {
+        CrashWriteFieldHex("pc_minus_libGTASA=", pc - g_libGTASA);
+    }
+
+    if (pc >= g_libSAMP && g_libSAMP != 0) {
+        CrashWriteFieldHex("pc_minus_libmultiplayer=", pc - g_libSAMP);
+    }
+
+    CrashWrite("lastFile=");
+    if (SafeLen(lastFile, sizeof(lastFile)) > 0) {
+        (void)write(g_nativeCrashFd, lastFile, SafeLen(lastFile, sizeof(lastFile)));
+    }
+    CrashWrite("\n");
+
+    CrashWrite("lastTexture=");
+    if (SafeLen(g_iLastBlock, sizeof(g_iLastBlock)) > 0) {
+        (void)write(g_nativeCrashFd, g_iLastBlock, SafeLen(g_iLastBlock, sizeof(g_iLastBlock)));
+    }
+    CrashWrite("\n=== END NATIVE CRASH ===\n");
+
+    if (g_nativeCrashFd >= 0) {
+        (void)fsync(g_nativeCrashFd);
+    }
+
+    // Diagnostic build: terminate immediately after preserving the crash context.
+    _exit(128 + signum);
+}
+
+static void InstallNativeCrashTracer()
+{
+    const char* path =
+        "/storage/emulated/0/Android/data/com.russia.game/files/native_crash_trace.txt";
+
+    g_nativeCrashFd = open(
+        path,
+        O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC,
+        0600
+    );
+
+    if (g_nativeCrashFd >= 0) {
+        CrashWrite("BetaTester native crash tracer ready\n");
+    }
+
+    struct sigaction action{};
+    action.sa_sigaction = NativeCrashSignalHandler;
+    sigemptyset(&action.sa_mask);
+    action.sa_flags = SA_SIGINFO;
+
+    sigaction(SIGSEGV, &action, nullptr);
+    sigaction(SIGABRT, &action, nullptr);
+    sigaction(SIGBUS,  &action, nullptr);
+    sigaction(SIGFPE,  &action, nullptr);
+    sigaction(SIGILL,  &action, nullptr);
 }
 
 extern "C"
@@ -308,29 +357,7 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved)
 
 	CLoader::loadBassLib();
 
-	struct sigaction act{};
-	act.sa_sigaction = handler;
-	sigemptyset(&act.sa_mask);
-	act.sa_flags = SA_SIGINFO;
-	sigaction(SIGSEGV, &act, &act_old);
-
-	struct sigaction act1{};
-	act1.sa_sigaction = handler1;
-	sigemptyset(&act1.sa_mask);
-	act1.sa_flags = SA_SIGINFO;
-	sigaction(SIGABRT, &act1, &act1_old);
-
-	struct sigaction act2{};
-	act2.sa_sigaction = handler2;
-	sigemptyset(&act2.sa_mask);
-	act2.sa_flags = SA_SIGINFO;
-	sigaction(SIGFPE, &act2, &act2_old);
-
-	struct sigaction act3{};
-	act3.sa_sigaction = handler3;
-	sigemptyset(&act3.sa_mask);
-	act3.sa_flags = SA_SIGINFO;
-	sigaction(SIGBUS, &act3, &act3_old);
+	InstallNativeCrashTracer();
 
 	return JNI_VERSION_1_6;
 }
