@@ -1761,7 +1761,8 @@ void InstallHooks()
     CHook::InlineHook("_ZN13CMonsterTruck22ProcessEntityCollisionEP7CEntityP9CColPoint", &CMonsterTruck__ProcessEntityCollision_hook, &CMonsterTruck__ProcessEntityCollision);
     CHook::InlineHook("_ZN8CTrailer22ProcessEntityCollisionEP7CEntityP9CColPoint", &CTrailer__ProcessEntityCollision_hook, &CTrailer__ProcessEntityCollision);
 
-    CHook::InlineHook("_ZN14MainMenuScreen6OnExitEv", &MainMenuScreen__OnExit_hook, &MainMenuScreen__OnExit);
+    // TESTE: não interceptar MainMenuScreen::OnExit; evitamos CGame::exitGame() ao sair do menu
+    // CHook::InlineHook("_ZN14MainMenuScreen6OnExitEv", &MainMenuScreen__OnExit_hook, &MainMenuScreen__OnExit);
 
 	CHook::InlineHook("_ZN11CAutomobile9PreRenderEv", &CAutomobile__PreRender_hook, &CAutomobile__PreRender);
 	CHook::InlineHook("_ZN11CAutomobile17UpdateWheelMatrixEii", &CAutomobile__UpdateWheelMatrix_hook, &CAutomobile__UpdateWheelMatrix);
