@@ -261,7 +261,7 @@ class MainActivity : AppCompatActivity() {
         private const val TEST_MODE_ON_VALUE = "1"
 
         // Servidor SA-MP direto do Beta Tester
-        private const val SERVER_IP = "149.56.41.51"
-        private const val SERVER_PORT = "7774"
+        private const val SERVER_IP = "179.198.105.167"
+        private const val SERVER_PORT = "7125"
     }
 }
