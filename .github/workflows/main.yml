@@ -33,7 +33,7 @@ jobs:
         run: chmod +x gradlew
 
       - name: Compilar APK
-        run: ./gradlew assembleVer_releaseDebug --stacktrace
+        run: ./gradlew assembleVer_releaseRelease --stacktrace
 
       - name: Salvar APK
         uses: actions/upload-artifact@v4
