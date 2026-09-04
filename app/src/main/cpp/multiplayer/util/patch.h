@@ -8,6 +8,8 @@
 #include <link.h>
 #include <sys/cachectl.h>
 #include <sys/mman.h>
+#include <stdlib.h>
+#include <errno.h>
 
 #ifdef __arm__
 #define __32BIT
@@ -48,17 +50,83 @@ public:
     }
 
     static void UnFuck(uintptr_t ptr, uint64_t len = 4096) {
-#if VER_x32
-        if(mprotect((void*)(ptr & 0xFFFFF000), len, PROT_READ | PROT_WRITE | PROT_EXEC) == 0)
-            return;
+        /*
+         * Alguns Androids/SELinux bloqueiam execmod quando tentamos tornar
+         * gravável uma página RX que ainda está mapeada diretamente do APK/lib.
+         *
+         * O código antigo fazia:
+         *   1) tenta RWX
+         *   2) se falhar, deixa somente RW
+         *
+         * Isso é perigoso: depois do fallback a página deixa de ser executável,
+         * mas o GTA tenta executar essa mesma página e pode fechar.
+         *
+         * Aqui primeiro tentamos o comportamento normal. Se o SELinux negar,
+         * copiamos as páginas para um mapeamento anônimo no MESMO endereço.
+         * O endereço virtual não muda, então os offsets/hooks continuam válidos,
+         * mas a página deixa de ser file-backed e pode ser usada para os patches.
+         */
 
-        mprotect((void*)(ptr & 0xFFFFF000), len, PROT_READ | PROT_WRITE);
-#else
-        if(mprotect((void*)(ptr & 0xFFFFFFFFFFFFF000), len, PROT_READ | PROT_WRITE | PROT_EXEC) == 0)
-            return;
+        long pageSizeLong = sysconf(_SC_PAGESIZE);
+        if (pageSizeLong <= 0)
+            pageSizeLong = 4096;
 
-        mprotect((void*)(ptr & 0xFFFFFFFFFFFFF000), len, PROT_READ | PROT_WRITE);
-#endif
+        const uintptr_t pageSize = (uintptr_t)pageSizeLong;
+        const uintptr_t pageStart = ptr & ~(pageSize - 1);
+
+        if (len == 0)
+            len = 1;
+
+        const uintptr_t requestedEnd = ptr + (uintptr_t)len;
+        const uintptr_t pageEnd = (requestedEnd + pageSize - 1) & ~(pageSize - 1);
+        const size_t mapSize = (size_t)(pageEnd - pageStart);
+
+        // Caminho normal para aparelhos onde RWX na lib é permitido.
+        if (mprotect(
+                reinterpret_cast<void*>(pageStart),
+                mapSize,
+                PROT_READ | PROT_WRITE | PROT_EXEC) == 0) {
+            return;
+        }
+
+        Log("[patch] RWX denied at 0x%llX, remapping anonymous page",
+            (unsigned long long)pageStart);
+
+        // Guarda o conteúdo atual antes de substituir o mapeamento.
+        void* backup = malloc(mapSize);
+        if (backup == nullptr) {
+            Log("[patch] malloc failed while remapping 0x%llX",
+                (unsigned long long)pageStart);
+            return;
+        }
+
+        memcpy(backup, reinterpret_cast<void*>(pageStart), mapSize);
+
+        /*
+         * MAP_FIXED mantém exatamente o mesmo endereço usado pelos offsets
+         * do libGTASA. Sendo memória anônima, evitamos o execmod do arquivo
+         * libGTASA.so que aparece no bugreport.
+         */
+        void* mapped = mmap(
+                reinterpret_cast<void*>(pageStart),
+                mapSize,
+                PROT_READ | PROT_WRITE | PROT_EXEC,
+                MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
+                -1,
+                0);
+
+        if (mapped == MAP_FAILED) {
+            Log("[patch] anonymous mmap failed at 0x%llX errno=%d",
+                (unsigned long long)pageStart, errno);
+            free(backup);
+            return;
+        }
+
+        memcpy(mapped, backup, mapSize);
+        free(backup);
+
+        // Garante que a CPU veja o código copiado/alterado.
+        cacheflush(pageStart, pageStart + mapSize, 0);
     }
 
     static uintptr_t GetAddrBaseXDL(uintptr_t addr)
