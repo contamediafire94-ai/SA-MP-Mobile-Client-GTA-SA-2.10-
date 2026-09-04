@@ -409,7 +409,33 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
+    private fun ensureAdjustableConfig() {
+        val target = File(filesDir, "Adjustable.cfg")
+
+        if (target.isFile && target.length() > 0L) {
+            return
+        }
+
+        val candidates = listOf(
+            File(filesDir, "data/360Default1280x720.cfg"),
+            File(filesDir, "data/360Default960x720.cfg")
+        )
+
+        val source = candidates.firstOrNull { it.isFile && it.length() > 0L } ?: return
+
+        try {
+            source.inputStream().use { input ->
+                target.outputStream().use { output ->
+                    input.copyTo(output)
+                    output.flush()
+                }
+            }
+        } catch (_: Exception) {
+        }
+    }
+
     private fun launchGameAfterDataReady() {
+        ensureAdjustableConfig()
         val log = File(getExternalFilesDir(null).toString() + "/log.txt")
         log.delete()
 
