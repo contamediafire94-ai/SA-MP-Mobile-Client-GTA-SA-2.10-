@@ -1,6 +1,7 @@
 #include "../main.h"
 #include "RW/RenderWare.h"
 #include <sstream>
+#include <cerrno>
 #include "game.h"
 
 #include "../net/netgame.h"
@@ -45,80 +46,170 @@ struct stFile
 
 char lastFile[123];
 
+static void BuildStoragePath(char* out, size_t outSize, const char* root, const char* relative)
+{
+    if (!out || outSize == 0) return;
+
+    out[0] = '\0';
+
+    if (!root || !relative) return;
+
+    while (*relative == '/' || *relative == '\\') {
+        ++relative;
+    }
+
+    const size_t rootLen = strlen(root);
+    const bool hasSlash = rootLen > 0 && (root[rootLen - 1] == '/' || root[rootLen - 1] == '\\');
+
+    snprintf(out, outSize, hasSlash ? "%s%s" : "%s/%s", root, relative);
+
+    // Android usa '/' como separador. Alguns caminhos do GTA chegam com '\'.
+    for (char* p = out; *p; ++p) {
+        if (*p == '\\') {
+            *p = '/';
+        }
+    }
+}
+
+static void TraceNvFOpen(const char* requested, const char* resolved, bool ok, int err)
+{
+    if (!g_pszStorage) return;
+
+    char tracePath[512]{};
+    BuildStoragePath(tracePath, sizeof(tracePath), g_pszStorage, "nvfopen_trace.txt");
+
+    FILE* trace = fopen(tracePath, "ab");
+    if (!trace) return;
+
+    fprintf(
+        trace,
+        "requested=%s | resolved=%s | result=%s | errno=%d | %s\n",
+        requested ? requested : "(null)",
+        resolved ? resolved : "(null)",
+        ok ? "OK" : "FAIL",
+        err,
+        err ? strerror(err) : "none"
+    );
+    fclose(trace);
+}
+
 stFile* NvFOpen(const char* r0, const char* r1, int r2, int r3)
 {
-    strcpy(lastFile, r1);
+    if (!r1 || !g_pszStorage) {
+        TraceNvFOpen(r1, nullptr, false, EINVAL);
+        return nullptr;
+    }
 
-	static char path[255]{};
-	memset(path, 0, sizeof(path));
+    snprintf(lastFile, sizeof(lastFile), "%s", r1);
 
-	sprintf(path, "%s%s", g_pszStorage, r1);
+    char relative[256]{};
+    snprintf(relative, sizeof(relative), "%s", r1);
 
-	// ----------------------------
-	if(!strncmp(r1+12, "mainV1.scm", 10))
-	{
-		sprintf(path, "%sSAMP/main.scm", g_pszStorage);
-		Log("Loading %s", path);
-	}
-	// ----------------------------
-	if(!strncmp(r1+12, "SCRIPTV1.IMG", 12))
-	{
-		sprintf(path, "%sSAMP/script.img", g_pszStorage);
-		Log("Loading script.img..");
-	}
-	// ----------------------------
-	if(!strncmp(r1, "DATA/PEDS.IDE", 13))
-	{
-		sprintf(path, "%sSAMP/peds.ide", g_pszStorage);
-		Log("Loading peds.ide..");
-	}
-	// ----------------------------
-	if(!strncmp(r1, "DATA/VEHICLES.IDE", 17))
-	{
-		sprintf(path, "%sSAMP/vehicles.ide", g_pszStorage);
-		Log("Loading vehicles.ide..");
-	}
+    // Normaliza separadores antes de montar o caminho.
+    for (char* p = relative; *p; ++p) {
+        if (*p == '\\') {
+            *p = '/';
+        }
+    }
 
-	if (!strncmp(r1, "DATA/GTA.DAT", 12))
-	{
-		sprintf(path, "%sSAMP/gta.dat", g_pszStorage);
-		Log("Loading gta.dat..");
-	}
+    static char path[512]{};
+    memset(path, 0, sizeof(path));
+    BuildStoragePath(path, sizeof(path), g_pszStorage, relative);
 
-	if (!strncmp(r1, "DATA/HANDLING.CFG", 17))
-	{
-		sprintf(path, "%sSAMP/handling.cfg", g_pszStorage);
-		Log("Loading handling.cfg..");
-	}
+    // Redirecionamentos originais do cliente.
+    if (strstr(relative, "mainV1.scm") != nullptr) {
+        BuildStoragePath(path, sizeof(path), g_pszStorage, "SAMP/main.scm");
+        Log("Loading %s", path);
+    }
 
-	if (!strncmp(r1, "DATA/WEAPON.DAT", 15))
-	{
-		sprintf(path, "%sSAMP/weapon.dat", g_pszStorage);
-		Log("Loading weapon.dat..");
-	}
+    if (strstr(relative, "SCRIPTV1.IMG") != nullptr) {
+        BuildStoragePath(path, sizeof(path), g_pszStorage, "SAMP/script.img");
+        Log("Loading script.img..");
+    }
+
+    if (!strncmp(relative, "DATA/PEDS.IDE", 13)) {
+        BuildStoragePath(path, sizeof(path), g_pszStorage, "SAMP/peds.ide");
+        Log("Loading peds.ide..");
+    }
+
+    if (!strncmp(relative, "DATA/VEHICLES.IDE", 17)) {
+        BuildStoragePath(path, sizeof(path), g_pszStorage, "SAMP/vehicles.ide");
+        Log("Loading vehicles.ide..");
+    }
+
+    if (!strncmp(relative, "DATA/GTA.DAT", 12)) {
+        BuildStoragePath(path, sizeof(path), g_pszStorage, "SAMP/gta.dat");
+        Log("Loading gta.dat..");
+    }
+
+    if (!strncmp(relative, "DATA/HANDLING.CFG", 17)) {
+        BuildStoragePath(path, sizeof(path), g_pszStorage, "SAMP/handling.cfg");
+        Log("Loading handling.cfg..");
+    }
+
+    if (!strncmp(relative, "DATA/WEAPON.DAT", 15)) {
+        BuildStoragePath(path, sizeof(path), g_pszStorage, "SAMP/weapon.dat");
+        Log("Loading weapon.dat..");
+    }
 
 #if VER_x32
-	auto *st = (stFile*)malloc(8);
+    auto *st = (stFile*)malloc(8);
 #else
-	auto *st = (stFile*)malloc(0x10);
+    auto *st = (stFile*)malloc(0x10);
 #endif
-	st->isFileExist = false;
 
-	Log("%s", path);
-	FILE *f  = fopen(path, "rb");
+    if (!st) {
+        TraceNvFOpen(r1, path, false, ENOMEM);
+        return nullptr;
+    }
 
-	if(f)
-	{
-		st->isFileExist = true;
-		st->f = f;
-		return st;
-	}
-	else
-	{
-		Log("NVFOpen hook | Error: file not found (%s)", path);
-		free(st);
-		return nullptr;
-	}
+    st->isFileExist = false;
+    st->f = nullptr;
+
+    Log("%s", path);
+
+    errno = 0;
+    FILE *f = fopen(path, "rb");
+    int openErr = errno;
+
+    // CText pode pedir apenas "AMERICAN.GXT".
+    // Se isso acontecer, tenta automaticamente dentro de TEXT/.
+    if (!f) {
+        const char* fileName = strrchr(relative, '/');
+        fileName = fileName ? fileName + 1 : relative;
+
+        const char* ext = strrchr(fileName, '.');
+        const bool isGxt = ext && (!strcmp(ext, ".GXT") || !strcmp(ext, ".gxt"));
+
+        if (isGxt && strstr(relative, "TEXT/") == nullptr && strstr(relative, "text/") == nullptr) {
+            char fallbackRelative[320]{};
+            snprintf(fallbackRelative, sizeof(fallbackRelative), "TEXT/%s", fileName);
+
+            char fallbackPath[512]{};
+            BuildStoragePath(fallbackPath, sizeof(fallbackPath), g_pszStorage, fallbackRelative);
+
+            errno = 0;
+            f = fopen(fallbackPath, "rb");
+            openErr = errno;
+
+            if (f) {
+                snprintf(path, sizeof(path), "%s", fallbackPath);
+            }
+        }
+    }
+
+    if (f) {
+        st->isFileExist = true;
+        st->f = f;
+        TraceNvFOpen(r1, path, true, 0);
+        return st;
+    }
+
+    TraceNvFOpen(r1, path, false, openErr);
+    Log("NVFOpen hook | Error: file not found (%s)", path);
+
+    free(st);
+    return nullptr;
 }
 
 #include "keyboard.h"
@@ -297,12 +388,13 @@ size_t OS_FileRead_hook(OSFile a1, void *buffer, size_t numBytes)
 {
     dwRLEDecompressSourceSize = numBytes;
 
-    if (!numBytes) {
+    if (!a1 || !buffer || !numBytes) {
+        Log("OS_FileRead_hook: invalid args file=%p buffer=%p bytes=%zu", a1, buffer, numBytes);
         return 0;
     }
 
     size_t result = OS_FileRead(a1, buffer, numBytes);
-    if (CResourceCrypt::IsEncryptedFile((uint8 *) buffer)) {
+    if (result > 0 && CResourceCrypt::IsEncryptedFile((uint8 *) buffer)) {
         CResourceCrypt::DecryptStream(static_cast<char *>(buffer));
     }
     return result;
