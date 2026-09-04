@@ -38,7 +38,8 @@
         android:largeHeap="true"
         android:logo="@drawable/logo_splash"
         android:usesCleartextTraffic="true"
-        tools:replace="android:icon, android:label"
+        android:extractNativeLibs="true"
+        tools:replace="android:icon, android:label, android:extractNativeLibs"
        >
 
         <activity
