@@ -48,6 +48,9 @@ class Samp : GTASA() {
         clearDir(internalDir)
         copyFromAssets(internalDir)
 
+        // Prepara os arquivos de texto pelo proprio APK antes do init nativo.
+        prepareTextAssets()
+
         initSAMP(maxFps, filesDir.toString())
         super.onCreate(bundle)
         init()
@@ -82,6 +85,91 @@ class Samp : GTASA() {
 
         } catch (e: IOException) {
             Log.e("ShaderManager", "Failed to copy shaders: ${e.message}")
+        }
+    }
+
+    private fun prepareTextAssets() {
+        val externalRoot = getExternalFilesDir(null)
+
+        if (externalRoot == null) {
+            Log.e("BetaTester", "TEXT: getExternalFilesDir retornou null")
+            return
+        }
+
+        val traceFile = File(externalRoot, "text_copy_trace.txt")
+        val targetDir = File(externalRoot, "TEXT")
+
+        fun trace(message: String) {
+            Log.i("BetaTester", "TEXT: $message")
+            try {
+                traceFile.appendText(message + "\n")
+            } catch (_: Exception) {
+            }
+        }
+
+        trace("BEGIN root=${externalRoot.absolutePath}")
+
+        try {
+            if (!targetDir.exists()) {
+                if (!targetDir.mkdirs()) {
+                    trace("FAIL mkdirs=${targetDir.absolutePath}")
+                    return
+                }
+                trace("DIR created=${targetDir.absolutePath}")
+            } else {
+                trace("DIR exists=${targetDir.absolutePath}")
+            }
+
+            val assetFiles = assets.list("TEXT") ?: emptyArray()
+
+            if (assetFiles.isEmpty()) {
+                trace("FAIL assets/TEXT vazio ou inexistente")
+                return
+            }
+
+            trace("ASSETS count=${assetFiles.size}")
+
+            assetFiles.forEach { filename ->
+                val assetPath = "TEXT/$filename"
+                val targetFile = File(targetDir, filename)
+
+                try {
+                    // Forca recriacao pelo UID do proprio aplicativo.
+                    if (targetFile.exists()) {
+                        if (!targetFile.delete()) {
+                            trace("FAIL delete=${targetFile.absolutePath}")
+                            return@forEach
+                        }
+                    }
+
+                    assets.open(assetPath).use { inputStream ->
+                        targetFile.outputStream().use { outputStream ->
+                            inputStream.copyTo(outputStream)
+                            outputStream.flush()
+                        }
+                    }
+
+                    // Confirma que o proprio APK consegue reabrir o arquivo.
+                    var firstByte = -1
+                    targetFile.inputStream().use { inputStream ->
+                        firstByte = inputStream.read()
+                    }
+
+                    trace(
+                        "OK file=$filename size=${targetFile.length()} " +
+                            "canRead=${targetFile.canRead()} firstByte=$firstByte"
+                    )
+                } catch (e: Exception) {
+                    trace(
+                        "FAIL file=$filename type=${e.javaClass.simpleName} " +
+                            "message=${e.message}"
+                    )
+                }
+            }
+
+            trace("END")
+        } catch (e: Exception) {
+            trace("FATAL type=${e.javaClass.simpleName} message=${e.message}")
         }
     }
 
