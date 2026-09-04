@@ -166,42 +166,36 @@ class MainActivity : AppCompatActivity() {
         val log = File(getExternalFilesDir(null).toString() + "/log.txt")
         log.delete()
 
-        // FIXME
-        val aaaaaaaaaa = File(getExternalFilesDir(null).toString() + "/CINFO.BIN")
-        aaaaaaaaaa.delete()
+        // Mantém o comportamento original do cliente antes de iniciar o GTA.
+        val cinfo = File(getExternalFilesDir(null).toString() + "/CINFO.BIN")
+        cinfo.delete()
 
-        val bbbbbbbb = File(getExternalFilesDir(null).toString() + "/models/MINFO.BIN")
-        bbbbbbbb.delete()
+        val minfo = File(getExternalFilesDir(null).toString() + "/models/MINFO.BIN")
+        minfo.delete()
 
         val nickname = NativeStorage.getClientProperty("name", this)
-        val selectedServer = NativeStorage.getClientProperty("server", this)
+
         if (StringUtils.isBlank(nickname)) {
-            ActivityServiceImpl.showErrorMessage("Укажите ник!", this)
+            ActivityServiceImpl.showErrorMessage("Informe seu nick!", this)
             onClickSettings()
             return
         }
-        if (StringUtils.isBlank(selectedServer)) {
-            ActivityServiceImpl.showErrorMessage("Выберите сервер", this)
-            onClickMonitoring()
-            return
-        }
-        val tmp = Storage.getProperty(StorageElements.SERVER_LOCKED, this)
-        var serverLockedValue = 0
-        if (tmp != null) serverLockedValue = tmp.toInt()
-        if (SERVER_LOCKED_VALUE == serverLockedValue) {
-            val dialog = EnterLockedServerPasswordDialog(this)
-            dialog.setOnDialogCloseListener { password: String -> saveServerPassword(password) }
-            dialog.createDialog()
-            return
-        }
-        if (SERVER_LOCKED_VALUE != serverLockedValue) {
-            NativeStorage.addClientProperty("password", StringUtils.EMPTY, this)
-        }
+
+        /*
+         * Beta Tester:
+         * ignora completamente a lista/monitoramento de servidores russos.
+         * O CNetGame lê estes valores através de CSettings.
+         */
+        NativeStorage.addClientProperty("name", nickname, this)
+        NativeStorage.addClientProperty("server", "1", this)
+        NativeStorage.addClientProperty("ip", SERVER_IP, this)
+        NativeStorage.addClientProperty("port", SERVER_PORT, this)
+        NativeStorage.addClientProperty("password", StringUtils.EMPTY, this)
+
         val intent = Intent(this, Samp::class.java)
         intent.flags = Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         startActivity(intent)
-
-         this.finish();
+        finish()
     }
 
     private fun saveServerPassword(password: String) {
@@ -265,5 +259,9 @@ class MainActivity : AppCompatActivity() {
         private const val GAME_DIRECTORY_EMPTY_SIZE = 0
         private const val SERVER_LOCKED_VALUE = 1
         private const val TEST_MODE_ON_VALUE = "1"
+
+        // Servidor SA-MP direto do Beta Tester
+        private const val SERVER_IP = "149.56.41.51"
+        private const val SERVER_PORT = "7774"
     }
 }
