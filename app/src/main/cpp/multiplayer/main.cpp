@@ -297,20 +297,6 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved)
 	}
 	Log("libsamp.so image base address: 0x%X", g_libSAMP);
 
-    // heat
-    CRYPTEDSTRING(libstr, "libgvraudio.so");
-    if(dlopen(libstr.decode().c_str(), RTLD_LAZY))
-    {
-        Log("Poshel nahui");
-        exit(0);
-    }
-
-    CRYPTEDSTRING(testtest1111, "libradio.so");
-    if(dlopen(testtest1111.decode().c_str(), RTLD_LAZY))
-    {
-        exit(0);
-    }
-
 	CLoader::initJavaClasses(vm);
 
 	CHook::InitHookStuff();
