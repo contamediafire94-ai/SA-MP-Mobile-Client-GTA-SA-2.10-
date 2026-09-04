@@ -96,7 +96,7 @@ static void TraceNvFOpen(const char* requested, const char* resolved, bool ok, i
 
 stFile* NvFOpen(const char* r0, const char* r1, int r2, int r3)
 {
-    if (!r1 || !g_pszStorage) {
+    if (!r1) {
         TraceNvFOpen(r1, nullptr, false, EINVAL);
         return nullptr;
     }
@@ -115,57 +115,53 @@ stFile* NvFOpen(const char* r0, const char* r1, int r2, int r3)
     static char path[512]{};
     memset(path, 0, sizeof(path));
 
-    const char* fileName = strrchr(relative, '/');
-    fileName = fileName ? fileName + 1 : relative;
+    // A data inteira agora é instalada em filesDir pelo próprio APK.
+    // initSAMP() salva filesDir em g_pszRootStorage.
+    const char* primaryRoot =
+        (g_pszRootStorage && g_pszRootStorage[0] != '\0')
+            ? g_pszRootStorage
+            : g_pszStorage;
 
-    const char* ext = strrchr(fileName, '.');
-    const bool isGxt = ext &&
-        (!strcasecmp(ext, ".gxt"));
-
-    // Os arquivos GXT são copiados pelo Samp.kt para filesDir/TEXT.
-    // g_pszRootStorage recebe exatamente filesDir no initSAMP().
-    if (isGxt && g_pszRootStorage && g_pszRootStorage[0] != '\0') {
-        char privateRelative[320]{};
-        snprintf(privateRelative, sizeof(privateRelative), "TEXT/%s", fileName);
-        BuildStoragePath(path, sizeof(path), g_pszRootStorage, privateRelative);
-        Log("GXT private path: %s", path);
-    } else {
-        BuildStoragePath(path, sizeof(path), g_pszStorage, relative);
+    if (!primaryRoot) {
+        TraceNvFOpen(r1, nullptr, false, EINVAL);
+        return nullptr;
     }
 
-    // Redirecionamentos originais do cliente.
+    BuildStoragePath(path, sizeof(path), primaryRoot, relative);
+
+    // Redirecionamentos originais do cliente, agora também usando a data privada.
     if (strstr(relative, "mainV1.scm") != nullptr) {
-        BuildStoragePath(path, sizeof(path), g_pszStorage, "SAMP/main.scm");
+        BuildStoragePath(path, sizeof(path), primaryRoot, "SAMP/main.scm");
         Log("Loading %s", path);
     }
 
     if (strstr(relative, "SCRIPTV1.IMG") != nullptr) {
-        BuildStoragePath(path, sizeof(path), g_pszStorage, "SAMP/script.img");
+        BuildStoragePath(path, sizeof(path), primaryRoot, "SAMP/script.img");
         Log("Loading script.img..");
     }
 
     if (!strncmp(relative, "DATA/PEDS.IDE", 13)) {
-        BuildStoragePath(path, sizeof(path), g_pszStorage, "SAMP/peds.ide");
+        BuildStoragePath(path, sizeof(path), primaryRoot, "SAMP/peds.ide");
         Log("Loading peds.ide..");
     }
 
     if (!strncmp(relative, "DATA/VEHICLES.IDE", 17)) {
-        BuildStoragePath(path, sizeof(path), g_pszStorage, "SAMP/vehicles.ide");
+        BuildStoragePath(path, sizeof(path), primaryRoot, "SAMP/vehicles.ide");
         Log("Loading vehicles.ide..");
     }
 
     if (!strncmp(relative, "DATA/GTA.DAT", 12)) {
-        BuildStoragePath(path, sizeof(path), g_pszStorage, "SAMP/gta.dat");
+        BuildStoragePath(path, sizeof(path), primaryRoot, "SAMP/gta.dat");
         Log("Loading gta.dat..");
     }
 
     if (!strncmp(relative, "DATA/HANDLING.CFG", 17)) {
-        BuildStoragePath(path, sizeof(path), g_pszStorage, "SAMP/handling.cfg");
+        BuildStoragePath(path, sizeof(path), primaryRoot, "SAMP/handling.cfg");
         Log("Loading handling.cfg..");
     }
 
     if (!strncmp(relative, "DATA/WEAPON.DAT", 15)) {
-        BuildStoragePath(path, sizeof(path), g_pszStorage, "SAMP/weapon.dat");
+        BuildStoragePath(path, sizeof(path), primaryRoot, "SAMP/weapon.dat");
         Log("Loading weapon.dat..");
     }
 
@@ -183,17 +179,42 @@ stFile* NvFOpen(const char* r0, const char* r1, int r2, int r3)
     st->isFileExist = false;
     st->f = nullptr;
 
-    Log("%s", path);
-
     errno = 0;
     FILE *f = fopen(path, "rb");
-    const int openErr = errno;
+    int openErr = errno;
 
     if (f) {
         st->isFileExist = true;
         st->f = f;
         TraceNvFOpen(r1, path, true, 0);
         return st;
+    }
+
+    /*
+     * Fallback temporário:
+     * se algum arquivo ainda não existir na data privada, tenta o caminho antigo
+     * de Android/data. Isso mantém compatibilidade com arquivos que o próprio jogo
+     * possa ter criado ali durante os testes.
+     */
+    if (g_pszStorage && strcmp(primaryRoot, g_pszStorage) != 0) {
+        char fallbackPath[512]{};
+        BuildStoragePath(fallbackPath, sizeof(fallbackPath), g_pszStorage, relative);
+
+        errno = 0;
+        FILE *fallback = fopen(fallbackPath, "rb");
+        const int fallbackErr = errno;
+
+        if (fallback) {
+            st->isFileExist = true;
+            st->f = fallback;
+            TraceNvFOpen(r1, fallbackPath, true, 0);
+            return st;
+        }
+
+        Log(
+            "NVFOpen private+external FAIL | private=%s (%d) | external=%s (%d)",
+            path, openErr, fallbackPath, fallbackErr
+        );
     }
 
     TraceNvFOpen(r1, path, false, openErr);
